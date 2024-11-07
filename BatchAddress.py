@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Batch Script for Extracting Reused r Signatures and Attempting Private Key Recovery
+Updated for Blockchain.com Bulk API
 @author: iceland
 """
 import sys
@@ -59,7 +60,7 @@ def parseTx(txn):
 
 def get_rawtx_from_blockchain(txid):
     try:
-        htmlfile = urlopen(f"https://blockchain.info/rawtx/{txid}?format=hex", timeout=120)
+        htmlfile = urlopen(f"https://blockchain.com/rawtx/{txid}?format=hex", timeout=120)
         return htmlfile.read().decode("utf-8")
     except Exception as e:
         print(f"[ERROR] Unable to fetch raw transaction {txid}: {e}")
@@ -70,35 +71,27 @@ def HASH160(pubk_hex):
     P = ice.pub2upub(pubk_hex)
     return ice.pubkey_to_h160(0, iscompressed, P).hex()
 
-# Main function to scan and detect reused r values for a single address
-def check_tx(address):
-    print(f"[INFO] Checking transactions for address: {address}")
+# Main function to fetch all transactions for an address in bulk
+def fetch_transactions(address):
+    print(f"[INFO] Fetching transactions for address: {address}")
     txid = []
     cdx = []
-    offset = 0  # Initialize offset for pagination
-
+    
     try:
-        while True:
-            # Fetch transactions in batches of 100 with the offset parameter for pagination
-            url = f'https://mempool.space/api/address/{address}/txs/chain?limit=100&offset={offset}'
-            response = urlopen(url, timeout=60)
-            res = json.loads(response.read())
-            if not res:
-                break  # Exit loop if no more transactions are returned
-            
-            print(f"[INFO] Retrieved {len(res)} transactions for offset {offset}.")
-            for tx in res:
-                for vin in tx["vin"]:
-                    if "scriptpubkey_address" in vin["prevout"] and vin["prevout"]["scriptpubkey_address"] == address:
-                        txid.append(tx["txid"])
-                        cdx.append(vin["txid"])
-            
-            # Increase offset by 100 for the next batch
-            offset += 100
+        # Fetch all transactions in a single request (up to 50,000)
+        url = f'https://blockchain.com/rawaddr/{address}?n=50000'
+        response = urlopen(url, timeout=120)
+        tx_data = json.loads(response.read())
+        
+        tx_list = tx_data.get('txs', [])
+        print(f"[INFO] Retrieved {len(tx_list)} transactions for address {address}.")
 
-            # Stop if fewer than 100 transactions were returned, indicating no more pages
-            if len(res) < 100:
-                break
+        for tx in tx_list:
+            for vin in tx["inputs"]:
+                if "prev_out" in vin and "addr" in vin["prev_out"] and vin["prev_out"]["addr"] == address:
+                    txid.append(tx["hash"])
+                    cdx.append(vin["prev_out"]["n"])
+
     except Exception as e:
         print(f"[ERROR] Error fetching transactions for address {address}: {e}")
 
@@ -108,7 +101,7 @@ def check_tx(address):
 def detect_reused_r_values_batch(address_list):
     for address in address_list:
         print(f"[INFO] Starting detection of reused r values for address: {address}")
-        txid, cdx = check_tx(address)
+        txid, cdx = fetch_transactions(address)
         r_values = {}
         reused_r_data = []
         
